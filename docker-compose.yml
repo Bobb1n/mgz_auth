@@ -1,10 +1,26 @@
 services:
-  app:
-    build: .
+  gateway:
+    build:
+      context: ..
+      dockerfile: auth_service/api_gateway/Dockerfile
     ports:
       - "8080:8080"
     environment:
-      SERVER_PORT: "8080"
+      GATEWAY_PORT: "8080"
+      AUTH_SERVICE_URL: http://app:8081
+      CHAT_SERVICE_URL: ${CHAT_SERVICE_URL:-http://chat:8082}
+      USER_SERVICE_URL: ${USER_SERVICE_URL:-http://user:8083}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  app:
+    build:
+      context: ./auth_service
+      dockerfile: Dockerfile
+    environment:
+      SERVER_PORT: "8081"
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/auth?sslmode=disable
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
@@ -18,7 +34,9 @@ services:
     restart: unless-stopped
 
   migrate:
-    build: .
+    build:
+      context: ./auth_service
+      dockerfile: Dockerfile
     entrypoint: ["./migrate"]
     environment:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/auth?sslmode=disable
@@ -36,8 +54,6 @@ services:
       POSTGRES_DB: auth
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 2s
@@ -46,13 +62,122 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       timeout: 5s
       retries: 5
 
+  # --- Чат (gRPC): ожидает репозиторий chat-message-mgz рядом с auth_service (../chat-message-mgz)
+  create_chat_db:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: postgres
+    command: ["sh", "-c", "psql -h postgres -U postgres -d postgres -c 'CREATE DATABASE chat_message' || true"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  migrate_chat:
+    image: migrate/migrate:v4.18.3
+    volumes:
+      - ${CHAT_MIGRATIONS_PATH:-../chat-message-mgz}/migrations:/migrations:ro
+    command: ["-path", "/migrations", "-database", "postgres://postgres:postgres@postgres:5432/chat_message?sslmode=disable", "up"]
+    depends_on:
+      create_chat_db:
+        condition: service_completed_successfully
+    restart: "no"
+
+  chat:
+    build:
+      context: ${CHAT_REPO_PATH:-../chat-message-mgz}
+      dockerfile: Dockerfile
+    container_name: chat-app
+    environment:
+      GRPC_PORT: "50051"
+      DATABASE_URL: "postgres://postgres:postgres@postgres:5432/chat_message?sslmode=disable"
+      REDIS_ADDR: "redis:6379"
+      REDIS_DB: "0"
+      CACHE_TTL: "20m"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate_chat:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --- User service (gRPC): ожидает репозиторий user-mgz рядом (../user-mgz)
+  create_user_db:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: postgres
+    command: ["sh", "-c", "psql -h postgres -U postgres -d postgres -c 'CREATE DATABASE user_service' || true"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  migrate_user:
+    image: migrate/migrate:v4.18.3
+    volumes:
+      - ${USER_MIGRATIONS_PATH:-../user-mgz}/migrations:/migrations:ro
+    command: ["-path", "/migrations", "-database", "postgres://postgres:postgres@postgres:5432/user_service?sslmode=disable", "up"]
+    depends_on:
+      create_user_db:
+        condition: service_completed_successfully
+    restart: "no"
+
+  minio:
+    image: minio/minio:latest
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
+  create_minio_buckets:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3;
+      mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER:-minioadmin} $${MINIO_ROOT_PASSWORD:-minioadmin};
+      mc mb myminio/users --ignore-existing;
+      exit 0;
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    restart: "no"
+
+  user:
+    build:
+      context: ${USER_REPO_PATH:-../user-mgz}
+      dockerfile: Dockerfile
+    container_name: user-app
+    environment:
+      GRPC_PORT: "50052"
+      DATABASE_URL: "postgres://postgres:postgres@postgres:5432/user_service?sslmode=disable"
+      S3_ENDPOINT: "minio:9000"
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3_BUCKET: "users"
+      S3_USE_SSL: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate_user:
+        condition: service_completed_successfully
+      create_minio_buckets:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  minio_data:
