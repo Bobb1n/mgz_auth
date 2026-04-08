@@ -3,7 +3,8 @@ package main
 import (
 	"log/slog"
 	"os"
-
+	"net/http"
+    "github.com/prometheus/client_golang/prometheus/promhttp"
 	"api_gateway/internal/config"
 	"api_gateway/internal/chat"
 	"api_gateway/internal/middleware"
@@ -30,7 +31,7 @@ func main() {
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(200, map[string]string{"status": "ok", "service": "api-gateway"})
 	})
-
+	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
 	authProxy, err := proxy.NewReverseProxy(cfg.AuthServiceURL)
 	if err != nil {
 		slog.Error("auth proxy", "error", err)
