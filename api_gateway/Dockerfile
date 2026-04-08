@@ -2,7 +2,7 @@ FROM golang:1.25-alpine AS builder
 WORKDIR /app
 
 # Скопировать исходники gateway (с go.mod внутри) и chat-message-mgz внутрь билда
-COPY auth_service/api_gateway ./api_gateway
+COPY mgz_auth/api_gateway ./api_gateway
 COPY chat-message-mgz /chat-message-mgz
 
 WORKDIR /app/api_gateway
