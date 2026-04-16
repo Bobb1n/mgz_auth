@@ -1,21 +1,14 @@
 package middleware
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
-	"github.com/golang-jwt/jwt/v5"
+	"api_gateway/pkg/jwtauth"
+
 	"github.com/labstack/echo/v4"
 )
-
-// claims совпадают со структурой токена auth_service (access).
-type claims struct {
-	UserID   string `json:"user_id"`
-	Email    string `json:"email"`
-	Username string `json:"username"`
-	Kind     string `json:"kind"`
-	jwt.RegisteredClaims
-}
 
 const (
 	HeaderUserID    = "X-User-Id"
@@ -23,38 +16,30 @@ const (
 	HeaderUsername  = "X-User-Username"
 )
 
-// JWTValidate проверяет Bearer-токен и кладёт user_id, email, username в заголовки запроса.
-// Не вызывается для /health и /api/v1/auth — там токен не нужен.
-func JWTValidate(secret []byte) echo.MiddlewareFunc {
+func JWTValidate(verifier *jwtauth.Verifier) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			path := c.Request().URL.Path
-			if path == "/health" || strings.HasPrefix(path, "/api/v1/auth") {
+			if path == "/health" || path == "/metrics" || strings.HasPrefix(path, "/api/v1/auth") {
 				return next(c)
 			}
 
-			auth := c.Request().Header.Get("Authorization")
-			if auth == "" {
-				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "missing authorization header"})
+			authHeader := c.Request().Header.Get("Authorization")
+			if authHeader == "" {
+				return c.JSON(http.StatusUnauthorized, map[string]string{"error": jwtauth.ErrMissingHeader.Error()})
 			}
 			const prefix = "Bearer "
-			if !strings.HasPrefix(auth, prefix) {
-				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "invalid authorization format"})
+			if !strings.HasPrefix(authHeader, prefix) {
+				return c.JSON(http.StatusUnauthorized, map[string]string{"error": jwtauth.ErrInvalidFormat.Error()})
 			}
-			tokenStr := strings.TrimPrefix(auth, prefix)
 
-			tok, err := jwt.ParseWithClaims(tokenStr, &claims{}, func(*jwt.Token) (interface{}, error) {
-				return secret, nil
-			})
+			cl, err := verifier.VerifyAccess(strings.TrimPrefix(authHeader, prefix))
 			if err != nil {
-				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "invalid or expired token"})
-			}
-			cl, ok := tok.Claims.(*claims)
-			if !ok || !tok.Valid {
-				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "invalid token"})
-			}
-			if cl.Kind != "access" {
-				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "access token required"})
+				msg := jwtauth.ErrInvalidToken.Error()
+				if errors.Is(err, jwtauth.ErrWrongKind) {
+					msg = jwtauth.ErrWrongKind.Error()
+				}
+				return c.JSON(http.StatusUnauthorized, map[string]string{"error": msg})
 			}
 
 			c.Request().Header.Set(HeaderUserID, cl.UserID)

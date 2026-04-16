@@ -1,88 +1,52 @@
 package main
 
 import (
+	"context"
 	"log/slog"
-	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-	"api_gateway/internal/chat"
+	"api_gateway/internal/app"
 	"api_gateway/internal/config"
-	"api_gateway/internal/middleware"
-	"api_gateway/internal/proxy"
-	"api_gateway/internal/user"
-
-	"github.com/labstack/echo/v4"
-	echomw "github.com/labstack/echo/v4/middleware"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
+	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
 	cfg, err := config.Load()
 	if err != nil {
-		slog.Error("load config", "error", err)
+		log.Error("load config", "error", err)
 		os.Exit(1)
 	}
 
-	e := echo.New()
-	e.Use(echomw.Logger())
-	e.Use(echomw.Recover())
-	e.Use(echomw.CORS())
-	e.Use(middleware.JWTValidate([]byte(cfg.JWTSecret)))
+	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	e.GET("/health", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]string{"status": "ok", "service": "api-gateway"})
-	})
-	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
-
-	// Auth service — HTTP reverse proxy
-	authProxy, err := proxy.NewReverseProxy(cfg.AuthServiceURL)
+	a, err := app.New(cfg, log)
 	if err != nil {
-		slog.Error("auth proxy", "error", err)
+		log.Error("init app", "error", err)
 		os.Exit(1)
 	}
-	e.Any("/api/v1/auth", authProxy)
-	e.Any("/api/v1/auth/*", authProxy)
 
-	// Chat service — gRPC facade
-	chatClient, err := chat.NewClient(cfg.ChatGRPCAddr)
-	if err != nil {
-		slog.Error("chat grpc client", "error", err)
-		os.Exit(1)
-	}
-	defer func() { _ = chatClient.Close() }()
-	chat.NewHandler(chatClient).RegisterRoutes(e)
+	runErr := make(chan error, 1)
+	go func() { runErr <- a.Run(rootCtx) }()
 
-	// User service — gRPC facade
-	userClient, err := user.NewClient(cfg.UserGRPCAddr)
-	if err != nil {
-		slog.Error("user grpc client", "error", err)
-		os.Exit(1)
+	select {
+	case <-rootCtx.Done():
+		log.Info("signal received")
+	case err := <-runErr:
+		if err != nil {
+			log.Error("run", "error", err)
+		}
 	}
-	defer func() { _ = userClient.Close() }()
-	user.NewHandler(userClient).RegisterRoutes(e)
 
-	// Swipe service — HTTP reverse proxy
-	swipeProxy, err := proxy.NewReverseProxy(cfg.SwipeServiceURL)
-	if err != nil {
-		slog.Error("swipe proxy", "error", err)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := a.Shutdown(shutdownCtx); err != nil {
+		log.Error("shutdown", "error", err)
 		os.Exit(1)
 	}
-	e.Any("/v1/swipes", swipeProxy)
-	e.Any("/v1/swipes/*", swipeProxy)
-	e.Any("/v1/matches", swipeProxy)
-	e.Any("/v1/matches/*", swipeProxy)
-	e.Any("/v1/location", swipeProxy)
-	e.Any("/v1/candidates", swipeProxy)
-
-	slog.Info("gateway starting",
-		"port", cfg.ServerPort,
-		"auth", cfg.AuthServiceURL,
-		"chat_grpc", cfg.ChatGRPCAddr,
-		"user_grpc", cfg.UserGRPCAddr,
-		"swipe", cfg.SwipeServiceURL,
-	)
-	if err := e.Start(":" + cfg.ServerPort); err != nil {
-		slog.Error("gateway", "error", err)
-		os.Exit(1)
-	}
+	log.Info("gateway stopped")
 }

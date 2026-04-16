@@ -4,9 +4,11 @@ WORKDIR /app
 # Скопировать исходники gateway (с go.mod внутри) и внешние gRPC-сервисы внутрь билда.
 # Ожидаем структуру:
 # /app
+#   /auth_service          (для go replace на ../auth_service из api_gateway)
 #   /auth_service/api_gateway
 #   /chat-message-mgz
 #   /user-mgz
+#   /swipe-mgz
 COPY . .
 
 WORKDIR /app/auth_service/api_gateway

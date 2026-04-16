@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"strconv"
 
+	"api_gateway/pkg/grpcerr"
+
 	userv1 "github.com/S1FFFkA/user-mgz/pkg/api/user/v1"
 	"github.com/labstack/echo/v4"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -47,22 +47,8 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 }
 
 func grpcErrToHTTP(c echo.Context, err error) error {
-	st, ok := status.FromError(err)
-	if !ok {
-		return c.JSON(http.StatusInternalServerError, errResp("internal error"))
-	}
-	switch st.Code() {
-	case codes.NotFound:
-		return c.JSON(http.StatusNotFound, errResp("not found"))
-	case codes.AlreadyExists:
-		return c.JSON(http.StatusConflict, errResp("already exists"))
-	case codes.InvalidArgument:
-		return c.JSON(http.StatusBadRequest, errResp(st.Message()))
-	case codes.Unavailable:
-		return c.JSON(http.StatusServiceUnavailable, errResp("service unavailable"))
-	default:
-		return c.JSON(http.StatusInternalServerError, errResp("internal error"))
-	}
+	code, msg := grpcerr.HTTPStatus(err)
+	return c.JSON(code, errResp(msg))
 }
 
 func errResp(msg string) map[string]string {
@@ -90,8 +76,6 @@ func (h *Handler) createUser(c echo.Context) error {
 	if err := unmarshaler.Unmarshal(body, req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid json: "+err.Error()))
 	}
-	// Forward the auth-service UUID so user-mgz uses it as the profile ID,
-	// ensuring both services share the same identity across the platform.
 	ctx := c.Request().Context()
 	if authID := c.Request().Header.Get("X-User-Id"); authID != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, "x-auth-user-id", authID)

@@ -17,7 +17,8 @@ type Config struct {
 }
 
 type Server struct {
-	Port string
+	Port     string
+	GRPCPort string
 }
 
 type Database struct {
@@ -43,7 +44,8 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		Server: Server{
-			Port: getEnv("SERVER_PORT", "8081"),
+			Port:     getEnv("SERVER_PORT", "8081"),
+			GRPCPort: getEnv("GRPC_PORT", "50053"),
 		},
 		Database: Database{
 			URL: getEnv("DATABASE_URL", "postgres://postgres:postgres@localhost:5433/auth?sslmode=disable"),

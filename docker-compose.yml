@@ -2,15 +2,16 @@ services:
   gateway:
     build:
       context: ..
-      dockerfile: mgz_auth/api_gateway/Dockerfile
+      dockerfile: auth_service/api_gateway/Dockerfile
+    # На хосте порт 8080 занят, поэтому наружу пробрасываем 8090 -> 8080 в контейнере
     ports:
       - "8090:8080"
     environment:
       GATEWAY_PORT: "8080"
-      AUTH_SERVICE_URL: http://app:8081
+      AUTH_GRPC_ADDR: app:50053
       CHAT_GRPC_ADDR: chat:50051
       USER_GRPC_ADDR: user:50052
-      SWIPE_SERVICE_URL: http://swipe:8084
+      SWIPE_GRPC_ADDR: swipe:50054
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
     depends_on:
       - app
@@ -25,6 +26,7 @@ services:
       dockerfile: Dockerfile
     environment:
       SERVER_PORT: "8081"
+      GRPC_PORT: "50053"
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/auth?sslmode=disable
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
@@ -194,10 +196,12 @@ services:
     restart: "no"
 
   migrate_swipe:
-    image: migrate/migrate:v4.18.3
-    volumes:
-      - ${SWIPE_MIGRATIONS_PATH:-../swipe-mgz}/migrations:/migrations:ro
-    command: ["-path", "/migrations", "-database", "postgres://postgres:postgres@postgres:5432/swipe_service?sslmode=disable", "up"]
+    build:
+      context: ${SWIPE_REPO_PATH:-../swipe-mgz}
+      dockerfile: Dockerfile
+    entrypoint: ["./migrate"]
+    environment:
+      DATABASE_URL: "postgres://postgres:postgres@postgres:5432/swipe_service?sslmode=disable"
     depends_on:
       create_swipe_db:
         condition: service_completed_successfully
@@ -210,6 +214,7 @@ services:
     container_name: swipe-app
     environment:
       SERVER_PORT: "8084"
+      GRPC_PORT: "50054"
       DATABASE_URL: "postgres://postgres:postgres@postgres:5432/swipe_service?sslmode=disable"
       REDIS_ADDR: "redis:6379"
       REDIS_DB: "1"

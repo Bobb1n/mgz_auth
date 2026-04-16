@@ -1,16 +1,24 @@
 package main
 
 import (
-	"auth_service/internal/config"
+	"errors"
+	"flag"
 	"log/slog"
 	"os"
 
+	"auth_service/internal/config"
+	"auth_service/internal/migrations"
+
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
 func main() {
+	direction := flag.String("dir", "up", "migration direction: up | down")
+	steps := flag.Int("steps", 0, "number of steps for up/down (0 = all)")
+	flag.Parse()
+
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	cfg, err := config.Load()
@@ -19,16 +27,39 @@ func main() {
 		os.Exit(1)
 	}
 
-	m, err := migrate.New("file://migrations", cfg.Database.URL)
+	src, err := iofs.New(migrations.FS, ".")
+	if err != nil {
+		log.Error("migrations source", "error", err)
+		os.Exit(1)
+	}
+
+	m, err := migrate.NewWithSourceInstance("iofs", src, cfg.Database.URL)
 	if err != nil {
 		log.Error("migrate new", "error", err)
 		os.Exit(1)
 	}
-	defer m.Close()
+	defer func() { _, _ = m.Close() }()
 
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		log.Error("migrate up", "error", err)
+	if err := run(m, *direction, *steps); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		log.Error("migrate", "dir", *direction, "error", err)
 		os.Exit(1)
 	}
-	log.Info("migrations applied")
+	log.Info("migrations applied", "dir", *direction, "steps", *steps)
+}
+
+func run(m *migrate.Migrate, dir string, steps int) error {
+	switch dir {
+	case "up":
+		if steps > 0 {
+			return m.Steps(steps)
+		}
+		return m.Up()
+	case "down":
+		if steps > 0 {
+			return m.Steps(-steps)
+		}
+		return m.Down()
+	default:
+		return errors.New("dir must be 'up' or 'down'")
+	}
 }

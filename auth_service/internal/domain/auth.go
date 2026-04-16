@@ -2,20 +2,6 @@ package domain
 
 import "time"
 
-const (
-	TokenKindAccess  = "access"
-	TokenKindRefresh = "refresh"
-)
-
-type TokenClaims struct {
-	UserID   string    `json:"user_id"`
-	Email    string    `json:"email"`
-	Username string    `json:"username"`
-	Kind     string    `json:"kind"`
-	Exp      time.Time `json:"exp"`
-	Iat      time.Time `json:"iat"`
-}
-
 type TokenPair struct {
 	AccessToken  string
 	RefreshToken string
@@ -23,12 +9,12 @@ type TokenPair struct {
 }
 
 type LoginInput struct {
-	Login    string `json:"login"`    // email или username
-	Password string `json:"password"`
+	Login    string
+	Password string
 }
 
 type RegisterInput struct {
-	Email    string `json:"email"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Email    string
+	Username string
+	Password string
 }

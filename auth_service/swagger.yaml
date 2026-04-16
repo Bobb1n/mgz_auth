@@ -1,0 +1,269 @@
+openapi: 3.0.3
+info:
+  title: Auth Service API
+  version: 1.0.0
+  description: |
+    REST API для аутентификации пользователей.
+
+    Возможности:
+    - Регистрация с email/username/password.
+    - Логин по email **или** username + password.
+    - JWT: пара access + refresh токенов.
+    - Refresh access-токена по refresh-токену.
+    - Logout с блэклистингом обоих токенов в Redis до их истечения.
+
+    Безопасность:
+    - Пароль хешируется bcrypt (cost 10).
+    - Минимальная длина пароля — 8 символов.
+    - Заблокированные токены хранятся в Redis до `exp` (TTL).
+
+servers:
+  - url: http://localhost:8090
+    description: API Gateway (локально)
+  - url: http://localhost:8081
+    description: Auth service напрямую (для отладки)
+
+tags:
+  - name: Auth
+    description: Регистрация, вход, refresh, logout
+
+security: []
+
+paths:
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      summary: Регистрация нового пользователя
+      description: |
+        Создаёт пользователя в таблице `users` и сразу возвращает пару токенов.
+        Пользователь с таким email или username уже должен отсутствовать.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            examples:
+              example:
+                value:
+                  email: ivan@example.com
+                  username: ivan
+                  password: strong-pass-8
+      responses:
+        '201':
+          description: Пользователь создан, токены выданы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Некорректное тело запроса / пароль короче 8 символов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Пользователь с таким email или username уже существует
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Вход
+      description: |
+        Логин по email или username. Поле `login` распознаётся автоматически
+        (email по наличию `@`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            examples:
+              byUsername:
+                value:
+                  login: ivan
+                  password: strong-pass-8
+              byEmail:
+                value:
+                  login: ivan@example.com
+                  password: strong-pass-8
+      responses:
+        '200':
+          description: Успешный вход
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Некорректное тело запроса
+        '401':
+          description: Неверный логин или пароль
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Обновление access-токена
+      description: |
+        По действительному refresh-токену выпускается новая пара access + refresh.
+        Старый refresh-токен **не** блэклистится автоматически (blacklist нужно делать
+        через /logout, если нужно инвалидировать предыдущую пару).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Новая пара токенов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '400':
+          description: "`refresh_token` отсутствует"
+        '401':
+          description: Токен невалиден, просрочен или отозван (в блэклисте)
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout (blacklist токенов)
+      description: |
+        Помещает переданные токены в Redis-blacklist до их `exp`.
+        Оба поля опциональны, но имеет смысл передавать как минимум `refresh_token`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+      responses:
+        '200':
+          description: OK (идемпотентно)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "logged out" }
+
+  /metrics:
+    get:
+      tags: [Auth]
+      summary: Prometheus metrics
+      description: Prometheus exposition format. Не для внешних клиентов.
+      responses:
+        '200':
+          description: Текстовые метрики
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [email, username, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: ivan@example.com
+        username:
+          type: string
+          example: ivan
+        password:
+          type: string
+          format: password
+          minLength: 8
+          example: strong-pass-8
+
+    LoginRequest:
+      type: object
+      required: [login, password]
+      properties:
+        login:
+          type: string
+          description: "Email (c `@`) **или** username"
+          example: ivan
+        password:
+          type: string
+          format: password
+          example: strong-pass-8
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+
+    LogoutRequest:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUIDv7 — используется как единый идентификатор во всех сервисах
+          example: 019d986b-adda-7d87-a804-6c564196acf9
+        email:
+          type: string
+          format: email
+        username:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    TokenPair:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: JWT HS256, срок жизни — минуты
+        refresh_token:
+          type: string
+          description: JWT HS256, срок жизни — дни
+        expires_at:
+          type: string
+          format: date-time
+          description: Максимум из access/refresh exp
+
+    AuthResponse:
+      allOf:
+        - $ref: '#/components/schemas/TokenPair'
+        - type: object
+          properties:
+            user:
+              $ref: '#/components/schemas/User'
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: invalid login or password

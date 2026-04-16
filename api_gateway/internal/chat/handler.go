@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"api_gateway/internal/middleware"
+	"api_gateway/pkg/grpcerr"
 
 	"github.com/labstack/echo/v4"
 )
@@ -17,7 +18,6 @@ func NewHandler(client *Client) *Handler {
 	return &Handler{client: client}
 }
 
-// RegisterRoutes регистрирует HTTP-фасад чата в Echo.
 func (h *Handler) RegisterRoutes(e *echo.Echo) {
 	g := e.Group("/v1")
 
@@ -46,7 +46,8 @@ func (h *Handler) createDirectChat(c echo.Context) error {
 
 	chat, err := h.client.CreateDirectChat(c.Request().Context(), currentUserID, req.OtherUserID)
 	if err != nil {
-		return c.JSON(http.StatusBadGateway, map[string]string{"error": "chat service error"})
+		code, msg := grpcerr.HTTPStatus(err)
+		return c.JSON(code, map[string]string{"error": msg})
 	}
 	return c.JSON(http.StatusOK, chat)
 }
@@ -72,7 +73,8 @@ func (h *Handler) sendMessage(c echo.Context) error {
 
 	msg, err := h.client.SendMessage(c.Request().Context(), req.ChatID, currentUserID, req.Text)
 	if err != nil {
-		return c.JSON(http.StatusBadGateway, map[string]string{"error": "chat service error"})
+		code, m := grpcerr.HTTPStatus(err)
+		return c.JSON(code, map[string]string{"error": m})
 	}
 	return c.JSON(http.StatusOK, msg)
 }
@@ -99,7 +101,8 @@ func (h *Handler) listUserChats(c echo.Context) error {
 
 	chats, err := h.client.ListUserChats(c.Request().Context(), currentUserID, limit, offset)
 	if err != nil {
-		return c.JSON(http.StatusBadGateway, map[string]string{"error": "chat service error"})
+		code, m := grpcerr.HTTPStatus(err)
+		return c.JSON(code, map[string]string{"error": m})
 	}
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"chats":  chats,

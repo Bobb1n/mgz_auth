@@ -17,9 +17,7 @@ WORKDIR /app
 
 COPY --from=builder /auth_server .
 COPY --from=builder /migrate .
-COPY migrations ./migrations
 
 EXPOSE 8081
 
-# Миграции при старте, затем сервер
 CMD ["sh", "-c", "./migrate && ./auth_server"]

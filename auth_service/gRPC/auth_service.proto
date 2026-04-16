@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package auth.v1;
+
+option go_package = "auth_service/pkg/api/auth/v1;authv1";
+
+import "google/protobuf/timestamp.proto";
+
+service AuthService {
+  // Register creates a new user and issues a token pair.
+  rpc Register(RegisterRequest) returns (AuthResponse);
+  // Login authenticates by email OR username + password.
+  rpc Login(LoginRequest) returns (AuthResponse);
+  // Refresh exchanges a refresh token for a new pair.
+  rpc Refresh(RefreshRequest) returns (TokenPair);
+  // Logout blacklists provided tokens until they expire.
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+}
+
+message User {
+  string id = 1;                               // UUIDv7
+  string email = 2;
+  string username = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message TokenPair {
+  string access_token = 1;
+  string refresh_token = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+message AuthResponse {
+  User user = 1;
+  TokenPair tokens = 2;
+}
+
+message RegisterRequest {
+  string email = 1;
+  string username = 2;
+  string password = 3;
+}
+
+message LoginRequest {
+  string login = 1;     // email OR username
+  string password = 2;
+}
+
+message RefreshRequest {
+  string refresh_token = 1;
+}
+
+message LogoutRequest {
+  string access_token = 1;
+  string refresh_token = 2;
+}
+
+message LogoutResponse {}
