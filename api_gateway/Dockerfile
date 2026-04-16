@@ -1,11 +1,15 @@
 FROM golang:1.25-alpine AS builder
 WORKDIR /app
 
-# Скопировать исходники gateway (с go.mod внутри) и chat-message-mgz внутрь билда
-COPY mgz_auth/api_gateway ./api_gateway
-COPY chat-message-mgz /chat-message-mgz
+# Скопировать исходники gateway (с go.mod внутри) и внешние gRPC-сервисы внутрь билда.
+# Ожидаем структуру:
+# /app
+#   /auth_service/api_gateway
+#   /chat-message-mgz
+#   /user-mgz
+COPY . .
 
-WORKDIR /app/api_gateway
+WORKDIR /app/auth_service/api_gateway
 RUN go mod download
 RUN CGO_ENABLED=0 go build -o /service ./cmd/service
 
