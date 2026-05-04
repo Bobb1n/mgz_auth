@@ -62,20 +62,29 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 
 	e := echo.New()
 	e.HideBanner = true
+
 	e.Use(echomw.Logger())
 	e.Use(echomw.Recover())
 	e.Use(echomw.CORS())
-	e.Use(middleware.JWTValidate(verifier))
 
+	// Публичные роуты
 	e.GET("/health", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]string{"status": "ok", "service": "api-gateway"})
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "ok",
+			"service": "api-gateway",
+		})
 	})
+
 	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
 
-	auth.NewHandler(authClient).RegisterRoutes(e)
-	chat.NewHandler(chatClient).RegisterRoutes(e)
-	user.NewHandler(userClient).RegisterRoutes(e)
-	swipe.NewHandler(swipeClient).RegisterRoutes(e)
+	// Защищённые роуты
+	api := e.Group("")
+	api.Use(middleware.JWTValidate(verifier))
+
+	auth.NewHandler(authClient).RegisterRoutes(api)
+	chat.NewHandler(chatClient).RegisterRoutes(api)
+	user.NewHandler(userClient).RegisterRoutes(api)
+	swipe.NewHandler(swipeClient).RegisterRoutes(api)
 
 	httpSrv := &http.Server{
 		Addr:              net.JoinHostPort("", cfg.ServerPort),
@@ -97,6 +106,7 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 
 func (a *App) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
+
 	go func() {
 		a.log.Info("gateway starting",
 			"port", a.cfg.ServerPort,
@@ -105,6 +115,7 @@ func (a *App) Run(ctx context.Context) error {
 			"user_grpc", a.cfg.UserGRPCAddr,
 			"swipe_grpc", a.cfg.SwipeGRPCAddr,
 		)
+
 		if err := a.httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("http: %w", err)
 		}
@@ -120,10 +131,13 @@ func (a *App) Run(ctx context.Context) error {
 
 func (a *App) Shutdown(ctx context.Context) error {
 	a.log.Info("shutting down gateway")
+
 	err := a.httpSrv.Shutdown(ctx)
+
 	_ = a.authClient.Close()
 	_ = a.chatClient.Close()
 	_ = a.userClient.Close()
 	_ = a.swipeClient.Close()
+
 	return err
 }
