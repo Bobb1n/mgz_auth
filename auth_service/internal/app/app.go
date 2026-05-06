@@ -54,7 +54,13 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error
 	authUC := usecase.NewAuthUseCase(users, blacklist, tokens, cfg.JWT.AccessTTLMinutes, cfg.JWT.RefreshTTLDays)
 
 	httpHandler := httptransport.NewAuthHandler(authUC)
-	echoSrv := httptransport.NewRouter(httpHandler, log)
+	e := echo.New()
+
+	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
+
+	httptransport.RegisterRoutes(e, httpHandler) // если есть такая функция
+
+	echoSrv := e
 	httpSrv := &http.Server{
 		Addr:              net.JoinHostPort("", cfg.Server.Port),
 		Handler:           echoSrv,
